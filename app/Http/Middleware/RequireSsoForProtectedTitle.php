@@ -10,17 +10,19 @@ class RequireSsoForProtectedTitle
 {
     public function handle(Request $request, Closure $next): Response
     {
-        /*
-         * TODO: completa este middleware siguiendo el contrato del README.
-         *
-         * Pistas de Laravel:
-         * - El parámetro {title} ya fue resuelto por route model binding.
-         * - Puedes obtenerlo con $request->route('title').
-         * - Sanctum expone el usuario con $request->user('sanctum').
-         *
-         * No modifiques el controlador, las rutas ni los modelos.
-         */
+        $title = $request->route('title');
 
-        return $next($request);
+        if ($title !== null && $title->requires_sso === false) {
+            return $next($request);
+        }
+
+        if ($request->user('sanctum') !== null) {
+            return $next($request);
+        }
+
+        return response()->json([
+            'code' => 'SSO_REQUIRED',
+            'message' => 'Authentication is required to access this title.',
+        ], Response::HTTP_UNAUTHORIZED);
     }
 }
