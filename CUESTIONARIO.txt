@@ -28,7 +28,18 @@ Explica:
 
 RESPUESTA:
 
+cuando pienso en php lo primero que se me viene a la mente es algo como, "es un lenguaje y laravel es el framework"
+pero eso es muy mecanico y no explica mucho, php es el lenguaje que se ejecuta en el servidor, tiene variables, funciones, clases, tipos, excepciones y todo eso
 
+laravel va encima de php, no es otro lenguaje ni magia, sigue siendo codigo php pero con una estructura y varias herramientas que te ahorran hacer todo desde cero
+
+decir que es un framework mvc tambien se queda corto, te da un monton de cosas ya resueltas, rutas, middleware, contenedor de dependencias, orm, migraciones, colas, validacion, autenticacion y sobre todo convenciones, que al final ayudan bastante cuando el proyecto crece o lo toca mas gente
+
+4 funcionalidades, Eloquent para trabajar con tablas como modelos y no estar armando sql todo el rato, Blade para las plantillas, Artisan como cli y las migraciones para versionar cambios en la base de datos, tambien podria mencionar Sanctum, policies o el scheduler pero con esas ya alcanza
+
+cuando usaria php sin framework? para un script de cron, una migracion puntual o un endpoint muy pequeño, meter Laravel ahi seria como usar un camion para llevar una carta, y cuando elegiria Laravel? cuando ya hay autenticacion, base de datos, validaciones, paneles y el proyecto va a durar un buen tiempo
+
+y la ultima, se puede usar Laravel sin saber php? tecnicamente si, copiando ejemplos algo puede salir, pero cuando falla algo y el error viene de php ahi probablemente te quedas perdido, diria que puedes empezar asi pero no sostenerlo, tampoco hay una linea exacta entre saber php y saber Laravel, me parece mas un espectro que dos casillas
 
 ===============================================================================
 PREGUNTA 2 — ESTRUCTURAS DE DATOS
@@ -50,8 +61,13 @@ Para cada caso explica:
 
 RESPUESTA:
 
+1, para procesar solicitudes en el orden en que llegaron usaría una cola, FIFO, entra primero y sale primero, pero ojo con implementarla usando `array_shift` en un array de PHP porque cada retiro puede reindexar y terminar siendo O(n), mejor usar `SplQueue` o manejar dos indices, asi insertar y retirar queda en O(1), una pila no sirve porque cambia el orden, y una cola de prioridad solo tendría sentido si hay prioridades
 
+2, para deshacer usaría una pila, LIFO, la ultima accion es la primera que se deshace, con `push` y `pop` normalmente es O(1), para rehacer tendría otra pila porque si no pierdo lo que acabo de deshacer, como alternativa una lista doblemente enlazada permite moverse en ambos sentidos pero ocupa mas memoria, no se si para un editor simple valga la pena
 
+3, para buscar por id unico usaría una tabla hash, en promedio buscar, insertar o retirar es O(1), aunque en el peor caso por colisiones puede ser O(n), en PHP un array asociativo ya funciona bastante parecido para este uso, una alternativa sería un árbol balanceado, que tarda O(log n) pero mantiene el orden y permite consultas por rangos, en una base de datos normalmente esto se resolvería con un indice
+
+4, para representar conexiones entre usuarios usaría un grafo, probablemente una lista de adyacencia porque una red social suele ser dispersa, no todos se conectan con todos, ocupa O(V+E) y consultar vecinos cuesta O(grado), una matriz permite comprobar si existe una conexion en O(1) pero usa O(V²) memoria, asi que para este caso me parece demasiado, tambien podría usar un conjunto por nodo para comprobar conexiones mas rapido
 
 ===============================================================================
 PREGUNTA 3 — PROBLEMA SENCILLO DE PHP
@@ -100,8 +116,36 @@ Explica:
 
 RESPUESTA:
 
+Mi primera idea seria `explode(' ', strtolower($text))`, pero ahi aparece el problema, los signos quedan pegados a las palabras y con varios espacios aparecen elementos vacios, asi que no me sirve mucho
 
+Mejor separo por todo lo que no sea letra o numero con `preg_split` y la expresion `/[^\p{L}\p{N}]+/u`, el `+` agrupa varios separadores seguidos y `PREG_SPLIT_NO_EMPTY` evita devolver palabras vacias, el `/u` hace que trabaje con UTF-8
 
+Despues uso `array_count_values` para contar y `uksort` para ordenar las claves, primero comparo la frecuencia y si empatan uso `strcmp` para orden alfabetico
+
+```php
+function countWords(string $text): array
+{
+    $text = mb_strtolower($text, 'UTF-8');
+
+    $words = preg_split('/[^\\p{L}\\p{N}]+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+
+    if ($words === false || $words === []) {
+        return [];
+    }
+
+    $counts = array_count_values($words);
+
+    uksort($counts, function (string $a, string $b) use ($counts): int {
+        return $counts[$b] <=> $counts[$a] ?: strcmp($a, $b);
+    });
+
+    return $counts;
+}
+```
+
+si el texto esta vacio o solo tiene puntuacion devuelve un array vacio, no hace falta tratarlo como un error
+
+para unicode uso `mb_strtolower` en vez de `strtolower` y `\p{L}` para que tambien reconozca letras con acentos o ñ, si quisieran que `util` y `útil` se consideren la misma palabra tendria que normalizar usando `Normalizer` de intl, pero eso ya depende de lo que se espera
 
 ===============================================================================
 PREGUNTA 4 — COMPLETAR CONSULTA SQL
@@ -158,8 +202,28 @@ Explica:
 
 RESPUESTA:
 
+La frase "todos los usuarios, incluso los que no tienen compras" ya me hace pensar en `LEFT JOIN`, porque con un `INNER JOIN` esos usuarios directamente desaparecerian
 
+```sql
+SELECT
+    u.id AS user_id,
+    u.name,
+    COUNT(o.id) AS approved_order_count,
+    COALESCE(SUM(o.total), 0) AS total_spent
+FROM users u
+LEFT JOIN orders o
+    ON o.user_id = u.id
+    AND o.status = 'APPROVED'
+    AND o.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+GROUP BY u.id, u.name
+ORDER BY total_spent DESC;
+```
 
+los filtros van en el `ON` y no en el `WHERE`, porque el `WHERE` se ejecuta despues del join y podria quitar las filas donde la compra es NULL, o sea justo los usuarios sin compras, ahi el `LEFT JOIN` termina comportandose como un `INNER JOIN` sin que sea tan obvio
+
+`COALESCE` sirve para reemplazar el NULL por cero, porque `SUM` cuando no hay registros devuelve NULL, en cambio `COUNT(o.id)` ya devuelve 0 porque no cuenta valores NULL
+
+el `GROUP BY` incluye id y name, aunque en PostgreSQL podria bastar con la clave primaria, prefiero dejarlo explicito y no complicarme
 
 ===============================================================================
 PREGUNTA 5 — ÍNDICES Y OPTIMIZACIÓN
@@ -188,8 +252,30 @@ Incluye:
 
 RESPUESTA:
 
+primero me fijaria en el orden de las columnas, `user_id` y `status` son filtros de igualdad, mientras que `created_at` es un rango y tambien se usa para ordenar, asi que probaria algo asi
 
+```sql
+CREATE INDEX idx_orders_user_status_created
+    ON orders (user_id, status, created_at DESC);
+```
 
+el `DESC` puede ayudar con el orden de la consulta, aunque PostgreSQL tambien puede recorrer indices en sentido inverso
+
+tambien consideraria un indice parcial, sobre todo si hay muchas ordenes que no estan aprobadas
+
+```sql
+CREATE INDEX idx_orders_user_created_approved
+    ON orders (user_id, created_at DESC)
+    WHERE status = 'APPROVED';
+```
+
+este puede ser mas pequeño porque solo guarda las filas aprobadas, pero depende de los datos y de las consultas que se hagan, si necesito traer `total` tambien podria agregar `INCLUDE (total)` para intentar un index-only scan, aunque el indice creceria
+
+para revisar si realmente lo usa probaria `EXPLAIN (ANALYZE, BUFFERS)` y miraria si aparece un Index Scan o Bitmap Index Scan, tambien revisaria las estadisticas, no crearia indices a ciegas
+
+tener demasiados indices tampoco es gratis, ocupan espacio y cada insert, update o delete tiene que mantenerlos, puede aumentar el costo de escritura y el trabajo de mantenimiento
+
+Postgres puede decidir no usarlos si la consulta devuelve muchas filas, la tabla es pequeña, las estadisticas estan desactualizadas o el planner calcula que un Seq Scan sale mas barato, no siempre un indice significa que la consulta va a ser mas rapida
 
 ===============================================================================
 PREGUNTA 6 — PROCESO DE CI/CD
@@ -221,8 +307,19 @@ Puedes incluir un diagrama o un ejemplo de GitHub Actions.
 
 RESPUESTA:
 
+despues del `git push`, GitHub recibe el cambio y dispara el workflow de Actions, ahi empieza el pipeline, CI es integrar y validar cambios continuamente, entrega continua deja cada version lista para desplegar pero normalmente alguien aprueba, y despliegue continuo publica automaticamente, la diferencia principal entre las dos ultimas es esa aprobacion
 
+primero haria checkout del codigo, configuraria PHP con cache, instalaria dependencias con `composer install`, prepararia el entorno de pruebas y luego ejecutaria herramientas de formato como Pint y analisis estatico con PHPStan o Larastan, despues correrian las pruebas unitarias y de integracion con una base de datos de prueba, por ejemplo Postgres en un service container o SQLite si el proyecto lo permite
 
+si todo pasa, preparo el artefacto con dependencias de produccion, assets compilados y lo empaqueto, los secretos van en GitHub Secrets y nunca dentro del repositorio ni en los logs, el `.env` real se configura en el servidor
+
+desplegaria primero a staging, ejecutaria migraciones y smoke tests, y revisaria que todo funcione antes de pasar a produccion, para un sistema importante pondria una aprobacion manual, para algo interno y facil de revertir maybe no seria necesaria
+
+en produccion preferiria un deploy atomico usando releases y un symlink, o blue-green si esta en contenedores, despues ejecutaria las migraciones con `--force`, limpiaria o reconstruiria caches y reiniciaria las colas, al terminar monitorearia logs, errores 5xx, health checks y alertas
+
+si algo sale mal volveria al release anterior o desplegaria el tag previo, pero las migraciones son la parte delicada porque algunos cambios de base de datos no se pueden revertir sin perder datos, por eso intentaria hacerlas compatibles y tener un backup
+
+si una prueba falla el pipeline se detiene, no se despliega y se bloquea el merge hasta corregirlo, al menos esa seria la idea, porque de poco sirve tener CI si despues todos ignoran que falló
 
 ===============================================================================
 PREGUNTA 7 — APIS HTTP Y CÓDIGOS DE RESPUESTA
@@ -249,7 +346,29 @@ Incluye ejemplos de:
 
 RESPUESTA:
 
+el recorrido seria mas o menos asi, el cliente manda una peticion con metodo, url, headers y body, se resuelve DNS, se establece la conexion y si es HTTPS se negocia TLS, luego el servidor recibe la peticion, pasa por rutas y middleware, llega al controlador, consulta lo que necesita y devuelve una respuesta con status, headers y normalmente un JSON
 
+GET sirve para leer, POST suele crear, PUT reemplaza el recurso completo, PATCH modifica una parte y DELETE elimina, la idempotencia significa que repetir una operacion deja el mismo estado, GET, PUT y DELETE normalmente son idempotentes, POST no necesariamente y PATCH depende de como se haya implementado, esto importa bastante si el cliente reintenta por un fallo de red
+
+autenticacion responde a quien eres, autorizacion a que tienes permiso de hacer, por eso 401 significa que falta o no es valida la autenticacion, y 403 que estas identificado pero no tienes permiso
+
+los codigos que usaria son 200 para una respuesta normal, 201 cuando se crea algo, 204 cuando todo salio bien pero no hay body, 400 para una peticion mal formada, 404 si no existe el recurso, 409 si hay un conflicto, 422 para datos que no pasan validacion y 500 para un error inesperado del servidor, aunque la diferencia entre 400 y 422 depende un poco de las convenciones del equipo
+
+no mostraria stack traces, consultas SQL, rutas internas, tokens, secretos ni detalles que puedan ayudar a atacar el sistema, los errores tendrian un formato estable para que el cliente no tenga que adivinar
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "The given data was invalid.",
+    "details": {
+      "email": ["The email field is required."]
+    }
+  }
+}
+```
+
+un ejemplo exitoso podria devolver 200 con `READER_ACCESS_GRANTED`, una validacion devolveria 422 con ese formato y una peticion sin autenticacion 401 con `SSO_REQUIRED`, lo importante es mantener la misma estructura en toda la API
 
 ===============================================================================
 PREGUNTA 8 — ¿CÓMO APRENDE UNA RED NEURONAL?
@@ -261,6 +380,15 @@ Incluye qué papel cumplen la predicción, la función de pérdida y la retropro
 
 RESPUESTA:
 
+entrenar una red neuronal es basicamente ajustar sus parametros para que sus respuestas se acerquen a lo esperado, esos parametros son los pesos y sesgos, no es que aprenda reglas como una persona
+
+primero recibe un lote de datos y hace una prediccion, cada neurona combina sus entradas con los pesos, suma el sesgo y aplica una funcion de activacion, al final sale una prediccion, luego la funcion de perdida compara esa salida con la respuesta correcta y calcula que tan lejos estuvo
+
+la retropropagacion calcula como influye cada parametro en ese error usando gradientes y la regla de la cadena, despues el optimizador usa esos gradientes para ajustar los pesos, la tasa de aprendizaje controla cuanto se mueve, si es muy alta puede pasarse y si es muy baja el entrenamiento tarda un monton
+
+esto se repite por lotes y epocas hasta que la perdida mejora, aunque que baje en los datos de entrenamiento no significa que el modelo vaya a funcionar bien con datos nuevos, puede memorizar, por eso tambien se revisa validacion y se vigila el sobreajuste
+
+decir que la red aprende es una forma de hablar, al final esta optimizando una funcion y ajustando numeros, no entiende como lo haria una persona, pero aun asi consigue resultados bastante utiles
 
 ===============================================================================
 PREGUNTA 9 — ¿CÓMO FUNCIONA UN MODELO DE IA GENERATIVA DE TEXTO?
@@ -276,7 +404,17 @@ Puedes usar un ejemplo breve, sin fórmulas.
 
 RESPUESTA:
 
+PLN es el area que busca que las computadoras puedan trabajar con lenguaje humano, por ejemplo traducir, resumir, clasificar o responder preguntas, pero las tareas no son iguales, clasificar un texto es elegir una etiqueta, resumir es generar texto nuevo a partir de lo que le dieron
 
+los tokens no necesariamente son palabras completas, pueden ser partes de una palabra o incluso signos, cada token se representa con un numero y el modelo trabaja con esas representaciones
+
+durante el entrenamiento un modelo de lenguaje aprende a predecir el siguiente token usando el contexto, para hacerlo bien termina capturando patrones de gramatica, estilo, relaciones y bastante informacion que aparece en los textos, pero su objetivo sigue siendo predecir que viene despues
+
+para generar texto le das un prompt, calcula las probabilidades del siguiente token, selecciona uno y lo agrega, despues vuelve a hacer lo mismo, token por token, por eso puede inventar cosas, genera algo que parece coherente pero no necesariamente es verdad
+
+los transformers usan atencion para que cada token pueda relacionarse con otros tokens del contexto y darle mas importancia a algunos, eso ayuda a captar relaciones que estan lejos dentro del texto y tambien permite procesar partes en paralelo durante el entrenamiento, por ejemplo en "el equipo gano el partido en el ultimo minuto", para interpretar "gano" importan bastante "equipo" y "partido", la atencion ayuda a relacionar esas palabras
+
+igual no tengo una intuicion perfecta de por que funciona tan bien a esa escala, entiendo la idea de capturar relaciones y que el modelo aprende patrones, pero explicar de donde sale toda esa capacidad ya es otra cosa
 
 ===============================================================================
 PREGUNTA 10 — ¿CÓMO DISEÑARIAS UNA APLICACIÓN DE IA GENERATIVA SIN APAGAR POR UNA API?
@@ -291,9 +429,29 @@ breve de prompt para obtener un resumen con un formato definido.
 
 RESPUESTA:
 
+si quiero que corra local, primero tengo que ver que modelo entra en mi computadora, asi que no me iria por algo gigante, probablemente probaria Ollama con un modelo de 7B u 8B, es facil de instalar y puedo consultarlo como una API local, si quisiera algo mas especializado en resumenes podria probar mT5 o BART, aunque ahi ya hay mas configuracion con Transformers
 
+todo se ejecutaria en mi propia maquina, lo bueno es que el texto no tendria que salir a un servicio externo, pero el limite seria la RAM o VRAM disponible, si el modelo no entra podria usar cuantizacion de 4 bits, aunque puede perder algo de calidad
+
+para textos largos usaria chunks, divido el texto en partes, resumo cada parte y despues junto esos resumenes en uno mas corto, algo tipo map-reduce, funciona pero puede perder detalles o el contexto general, otra opcion seria ir actualizando un resumen parcial mientras avanzo, aunque eso puede tardar mas
+
+las limitaciones serian memoria, velocidad y calidad, en una maquina normal puede ser mas lento que usar un servicio en la nube y un modelo pequeño puede omitir cosas, repetir o inventar, no esperaria resultados perfectos
+
+para prompting probaria few-shot, le doy uno o dos ejemplos para que entienda el estilo o formato que quiero, y tambien instrucciones claras, por ejemplo definir la cantidad de puntos, la longitud y que no agregue datos que no aparecen en el texto
+
+un prompt podria ser algo asi
+
+```text
+Resume el texto en español de forma objetiva
+Devuelve como maximo 5 viñetas, cada una de 20 palabras o menos
+No inventes informacion y usa solo lo que aparece en el texto
+Devuelve este JSON, con un titulo y una lista de resumen
+
+Texto: <texto>
+```
+
+para un MVP quizá ni necesitaria JSON, texto plano seria mas simple, depende de si la app va a usar la respuesta despues o solo mostrarla
 
 ===============================================================================
 FIN DEL CUESTIONARIO
 ===============================================================================
-
